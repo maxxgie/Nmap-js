@@ -5,6 +5,11 @@ try:
     HAVE_RAW = True
 except Exception:
     HAVE_RAW = False
+try:
+    import probes
+    HAVE_PROBES = True
+except Exception:
+    HAVE_PROBES = False
 
 TOP_PORTS = [21,22,23,25,53,80,110,111,135,139,143,443,445,993,995,1723,3306,3389,5900,8080,8443]
 SVC_MAP = {21:"ftp",22:"ssh",23:"telnet",25:"smtp",53:"domain",80:"http",110:"pop3",143:"imap",443:"https",445:"microsoft-ds",3306:"mysql",3389:"ms-wbt-server",5432:"postgres",6379:"redis",27017:"mongodb",8080:"http-proxy"}
@@ -132,8 +137,16 @@ def main():
                 return {"port": p, "open": False}
             ok, banner = tcp_connect(host, p, timeout)
             if ok:
-                svc = SVC_MAP.get(p, "unknown") if args.svc else ""
-                return {"port": p, "open": True, "svc": svc, "ver": banner if args.svc else "", "banner": banner}
+                if args.svc and HAVE_PROBES:
+                    svc, ver = probes.probe(host, p, timeout)
+                    if not svc:
+                        svc = SVC_MAP.get(p, "unknown")
+                    if not ver and banner:
+                        ver = banner.splilines()[0][:120] if banner else ""
+                else:
+                    svc = SVC_MAP.get(p, "unknown") if args.svc else ""
+                    ver = banner if args.svc else ""
+                return {"port": p, "open": True, "svc": svc, "ver": ver, "banner": banner}
             return {"port": p, "open": False}
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(conc,len(ports) or 1)) as ex:
             for r in ex.map(scan_port, ports):
@@ -141,18 +154,17 @@ def main():
                     open_ports.append(r["port"])
                     port_results.append(r)
                     if args.verbose: print(f"  {host}:{r['port']} open {r['svc']} {r['ver']}")
-        
         if args.osdet:
             ttl, win = (None, None)
             if HAVE_RAW and open_ports:
                 port_for_probe = open_ports[0] if open_ports else 80
                 ttl, win = rawscan.os_fingerprint_ttl(host, port_for_probe, timeout)
-                if ttl is not None:
-                    osv = rawscan.os_guess_advancedd(ttl, win, open_ports)
-                else:
-                    osv = os_guess(open_ports)
+            if ttl is not None:
+                osv = rawscan.os_guess_advanced(ttl, win, open_ports)
             else:
-                osv = None
+                osv = os_guess(open_ports)
+        else:
+            osv = None
         scripts={}
         if args.scripts:
             for s in args.scripts:
