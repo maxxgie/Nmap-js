@@ -48,6 +48,7 @@ def parse_ports(spec, top):
 
 def tcp_connect(host,port,timeout):
     try:
+        fam = socket.AF_INET6 if ":" in host else socket.AF_INET
         s=socket.create_connection((host,port),timeout=timeout)
         s.settimeout(0.3)
         try:
@@ -81,12 +82,27 @@ def os_guess(open_ports):
     if 80 in open_ports or 443 in open_ports: return "Network device / Web server"
     return "Unknown"
 
-def script_run(name, banner):
-    if name=="banner": return (banner or "no banner")[:200]
-    if name=="http-title":
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import scripts as nse
+    HAVE_SCRIPTS = True
+except Exception as e:
+    HAVE_SCRIPTS = False
+    _scripts_err = str(e)
+
+def script_run(name, host, port, banner):
+    # inline implementations (always available)
+    if name == "banner":
+        return (banner or "no banner")[:200]
+    if name == "http-title":
         import re
-        m=re.search(r"<title>([^<]*)</title>", banner or "", re.I)
+        m = re.search(r"<title>([^<]*)</title>", banner or "", re.I)
         return m.group(1) if m else "no title"
+    if name == "ssh-hostkey":
+        return (banner or "")[:120]
+    if HAVE_SCRIPTS:
+        return nse.run(name, host, port, banner)
     return "script not found"
 
 def main():
@@ -127,9 +143,12 @@ def main():
         print(f"\nScanning {host}...")
         open_ports=[]
         port_results=[]
+        adaptive_timeout = timeout
+        adaptive_conc = conc
+        failed = 0
         def scan_port(p):
             if args.scan == "syn" and HAVE_RAW:
-                state = rawscan.raw_syn_scan(host, p, timeout)
+                state = rawscan.raw_syn_scan(host, p, adaptive_timeout)
                 if state == "open":
                     ok, banner = tcp_connect(host, p, timeout) if args.svc else (True, "")
                     svc = SVC_MAP.get(p, "unknown") if args.svc else ""
@@ -142,18 +161,23 @@ def main():
                     if not svc:
                         svc = SVC_MAP.get(p, "unknown")
                     if not ver and banner:
-                        ver = banner.splilines()[0][:120] if banner else ""
+                        ver = banner.splitlines()[0][:120] if banner else ""
                 else:
                     svc = SVC_MAP.get(p, "unknown") if args.svc else ""
                     ver = banner if args.svc else ""
                 return {"port": p, "open": True, "svc": svc, "ver": ver, "banner": banner}
             return {"port": p, "open": False}
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(conc,len(ports) or 1)) as ex:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(adaptive_conc,len(ports) or 1)) as ex:
             for r in ex.map(scan_port, ports):
                 if r["open"]:
                     open_ports.append(r["port"])
                     port_results.append(r)
                     if args.verbose: print(f"  {host}:{r['port']} open {r['svc']} {r['ver']}")
+                else:
+                    failed += 1
+                    if failed > len(ports) * 0.8:
+                        adaptive_timeout = min(adaptive_timeout * 1.5, 10)
+                        adaptive_conc = max(1, adaptive_conc // 2)
         if args.osdet:
             ttl, win = (None, None)
             if HAVE_RAW and open_ports:
@@ -167,9 +191,12 @@ def main():
             osv = None
         scripts={}
         if args.scripts:
+            names = []
             for s in args.scripts:
+                names.extend([x.strip() for x in s.split(",") if x.strip()])
+            for s in names:
                 for pr in port_results:
-                    scripts[f"{pr['port']}/{s}"]=script_run(s, pr.get("banner",""))
+                    scripts[f"{pr['port']}/{s}"]=script_run(s, host, pr["port"], pr.get("banner",""))
         res={"host":host,"ports":port_results,"os":osv,"scripts":scripts}
         results.append(res)
         print(f"\nNmap scan report for {host}")
