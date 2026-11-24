@@ -10,10 +10,17 @@
         "banner": ""
       },
       {
+        "port": 53,
+        "open": true,
+        "svc": "unknown",
+        "ver": "",
+        "banner": ""
+      },
+      {
         "port": 80,
         "open": true,
         "svc": "http",
-        "ver": "",
+        "ver": "HTTP/1.1 200 OK",
         "banner": ""
       },
       {
