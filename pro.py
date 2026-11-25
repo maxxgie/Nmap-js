@@ -63,7 +63,7 @@ def plugin_run(name, host, port, banner):
     if name in plugins:
         return plugins[name](host, port, banner)
     return "plugin not found"
-EOF
-echo done
+
+ 
 def mac_lookup(mac):
     return advanced_mac(mac) if False else None

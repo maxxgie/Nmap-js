@@ -1,0 +1,2 @@
+from setuptools import setup
+setup(name="nmap-js", version="1.0.0", py_modules=["nmap", "rawscan", "probes", "scripts", "extras", "advamced", "pro"],entry_points={"console+scripts":["nmap=nmap:main"]})
