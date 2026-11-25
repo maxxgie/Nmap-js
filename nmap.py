@@ -100,6 +100,11 @@ try:
     HAVE_ADV = True
 except Exception:
     HAVE_ADV = False
+try:
+    import pro
+    HAVE_PRO = True
+except Exception:
+    HAVE_PRO = False
 
 def script_run(name, host, port, banner):
     # inline implementations (always available)
@@ -122,6 +127,7 @@ def main():
     ap.add_argument("-sS", dest="scan", action="store_const", const="syn", default="connect")
     ap.add_argument("-sT", dest="scan", action="store_const", const="connect")
     ap.add_argument("-sU", dest="scan", action="store_const", const="udp")
+    ap.add_argument("-sY", dest="scan", action="store_const", const="sctp")
     ap.add_argument("-sV", dest="svc", action="store_true")
     ap.add_argument("-O", dest="osdet", action="store_true")
     ap.add_argument("-sn", dest="hostonly", action="store_true")
@@ -149,9 +155,27 @@ def main():
     ap.add_argument("--ftp-bounce", dest="ftp_bounce")
     ap.add_argument("--idle", dest="idle")
     ap.add_argument("--profile", dest="profile", choices=["quick","full","stealth"])
+    ap.add_argument("-A", dest="aggro", action="store_true")
+    ap.add_argument("-F", dest="fast", action="store_true")
+    ap.add_argument("-q", dest="quick_alias", action="store_true")
+    ap.add_argument("-s", dest="stealth_alias", action="store_true")
+    ap.add_argument("--dns-enum", dest="dns_enum", action="store_true")
+    ap.add_argument("--smb", dest="smb", action="store_true")
+    ap.add_argument("--vuln", dest="vuln", action="store_true")
+    ap.add_argument("--csv", dest="csv")
+    ap.add_argument("--html", dest="html")
+    ap.add_argument("--diff", dest="diff")
     args=ap.parse_args()
     if HAVE_EXTRAS and args.profile:
         args = extras.apply_profile(args)
+    if args.aggro:
+        args.svc = True; args.osdet = True; args.scripts = (args.scripts or []) + ["banner","http-title"]
+    if args.fast:
+        args.top = 100; args.ports = ""
+    if args.quick_alias:
+        args.profile = "quick"; args = extras.apply_profile(args)
+    if args.stealth_alias:
+        args.profile = "stealth"; args = extras.apply_profile(args)
 
     if args.config and HAVE_EXTRAS:
         cfg = extras.load_config(args.config)
@@ -204,14 +228,20 @@ def main():
             if args.scan == "udp" and HAVE_ADV:
                 state = advanced.udp_scan(host, p, adaptive_timeout)
                 return {"port": p, "open": state == "open", "svc": "", "ver": "", "banner": ""}
+            if args.scan == "sctp" and HAVE_ADV:
+                state = advanced.sctp_scan(host, p, adaptive_timeout)
+                return {"port": p, "open": state == "open", "svc": "", "ver": "", "banner": ""}
             if args.scan == "syn" and HAVE_RAW:
                 decoys = args.decoy.split(",") if args.decoy else None
                 state = rawscan.raw_syn_scan(host, p, adaptive_timeout, frag=args.fragment, ttl=args.ttl, decoys=decoys)
-                if state == "open":
-                    ok, banner = tcp_connect(host, p, timeout) if args.svc else (True, "")
-                    svc = SVC_MAP.get(p, "unknown") if args.svc else ""
-                    return {"port": p, "open": True, "svc": svc, "ver": banner if args.svc else "", "banner": banner}
-                return {"port": p, "open": False}
+                if state in (None, "filtered"):
+                    pass
+                else:
+                    if state == "open":
+                        ok, banner = tcp_connect(host, p, adaptive_timeout) if args.svc else (True, "")
+                        svc = SVC_MAP.get(p, "unknown") if args.svc else ""
+                        return {"port": p, "open": True, "svc": svc, "ver": banner if args.svc else "", "banner": banner}
+                    return {"port": p, "open": False}
             ok, banner = tcp_connect(host, p, timeout)
             if ok:
                 if args.svc and HAVE_PROBES:
@@ -277,6 +307,15 @@ def main():
             port = 80 if 80 in open_ports else 8080
             links = advanced.crawl(host, port)
             if links: print("Links: " + ", ".join(links[:10]))
+        if args.dns_enum and HAVE_PRO:
+            info = pro.dns_enum(host)
+            if info: print("DNS:", info)
+        if args.smb and HAVE_PRO and 445 in open_ports:
+            print("SMB:", pro.smb_enum(host))
+        if args.vuln and HAVE_PRO:
+            for pr in port_results:
+                vs = pro.vuln_check(host, pr["port"], pr.get("banner",""))
+                for v in vs: print(f"Vuln {pr['port']}: {v}")
 
     out=None; fmt=None
     if args.outN: out=args.outN; fmt="normal"
@@ -308,6 +347,18 @@ def main():
                 content+="\n"
         with open(out,"w") as f: f.write(content)
         print(f"\nSaved to {out}")
+    if args.csv and HAVE_PRO:
+        with open(args.csv,"w") as f: f.write(pro.export_csv(results))
+        print(f"Saved CSV to {args.csv}")
+    if args.html and HAVE_PRO:
+        with open(args.html,"w") as f: f.write(pro.export_html(results))
+        print(f"Saved HTML to {args.html}")
+    if args.diff and HAVE_PRO:
+        try:
+            with open(args.diff) as f: old = json.load(f)
+            print("Diff:", pro.diff_results(old, results))
+        except Exception as e:
+            print("Diff error:", e)
 
 if __name__=="__main__":
     main()
