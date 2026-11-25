@@ -146,7 +146,12 @@ def main():
     ap.add_argument("--tls", dest="tls", action="store_true")
     ap.add_argument("--dns", dest="dns", action="store_true")
     ap.add_argument("--crawl", dest="crawl", action="store_true")
+    ap.add_argument("--ftp-bounce", dest="ftp_bounce")
+    ap.add_argument("--idle", dest="idle")
+    ap.add_argument("--profile", dest="profile", choices=["quick","full","stealth"])
     args=ap.parse_args()
+    if HAVE_EXTRAS and args.profile:
+        args = extras.apply_profile(args)
 
     if args.config and HAVE_EXTRAS:
         cfg = extras.load_config(args.config)
@@ -189,6 +194,13 @@ def main():
         def scan_port(p):
             if limiter:
                 limiter.wait()
+            if args.ftp_bounce and HAVE_ADV:
+                proxy = args.ftp_bounce.split(":")
+                state = advanced.ftp_bounce_scan(proxy[0], int(proxy[1]) if len(proxy)>1 else 21, host, p)
+                return {"port": p, "open": state == "open", "svc": "", "ver": "", "banner": ""}
+            if args.idle and HAVE_ADV:
+                state = advanced.idle_scan(args.idle, host, p)
+                return {"port": p, "open": state == "open", "svc": "", "ver": "", "banner": ""}
             if args.scan == "udp" and HAVE_ADV:
                 state = advanced.udp_scan(host, p, adaptive_timeout)
                 return {"port": p, "open": state == "open", "svc": "", "ver": "", "banner": ""}

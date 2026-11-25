@@ -1,11 +1,10 @@
-
+"""Extra features: rate limiting, traceroute, config, logging, resume."""
 import json, socket, time, logging, os
 
 class RateLimiter:
     def __init__(self, rate):
         self.interval = 1.0 / rate if rate > 0 else 0
-        self.last = 0.0
-
+        self.last = 0
     def wait(self):
         if self.interval:
             now = time.time()
@@ -14,7 +13,6 @@ class RateLimiter:
                 time.sleep(self.interval - delta)
             self.last = time.time()
 
-
 def load_config(path):
     if not path or not os.path.exists(path):
         return {}
@@ -22,7 +20,8 @@ def load_config(path):
         return json.load(f)
 
 def setup_logging(path):
-    logging.basicConfig(filename=path, level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(filename=path, level=logging.INFO,
+                        format="%(asctime)s %(levelname)s %(message)s")
 
 def traceroute(dst, max_hops=30, timeout=1):
     out = []
@@ -47,9 +46,22 @@ def save_resume(path, data):
     with open(path, "w") as f:
         json.dump(data, f)
 
-
 def load_resume(path):
     if path and os.path.exists(path):
         with open(path) as f:
             return json.load(f)
     return []
+PROFILES = {
+    "quick": {"ports": "1-1000", "timing": 4, "svc": True, "osdet": False},
+    "full": {"ports": "1-65535", "timing": 4, "svc": True, "osdet": True},
+    "stealth": {"ports": "1-1000", "timing": 2, "svc": True, "osdet": True, "fragment": True, "scan": "syn"},
+}
+
+def apply_profile(args):
+    prof = PROFILES.get(args.profile)
+    if not prof:
+        return args
+    for k, v in prof.items():
+        if hasattr(args, k):
+            setattr(args, k, v)
+    return args
