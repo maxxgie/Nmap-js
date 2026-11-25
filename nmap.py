@@ -95,7 +95,12 @@ try:
     HAVE_EXTRAS = True
 except Exception:
     HAVE_EXTRAS = False
-    
+try:
+    import advanced
+    HAVE_ADV = True
+except Exception:
+    HAVE_ADV = False
+
 def script_run(name, host, port, banner):
     # inline implementations (always available)
     if name == "banner":
@@ -135,20 +140,26 @@ def main():
     ap.add_argument("--config", dest="config")
     ap.add_argument("--log", dest="logfile")
     ap.add_argument("--resume", dest="resume")
+    ap.add_argument("--fragment", dest="fragment", action="store_true")
+    ap.add_argument("--decoy", dest="decoy")
+    ap.add_argument("--ttl", dest="ttl", type=int, default=64)
+    ap.add_argument("--tls", dest="tls", action="store_true")
+    ap.add_argument("--dns", dest="dns", action="store_true")
+    ap.add_argument("--crawl", dest="crawl", action="store_true")
     args=ap.parse_args()
-    
+
     if args.config and HAVE_EXTRAS:
         cfg = extras.load_config(args.config)
         if cfg.get("rate") and not args.rate:
             args.rate = cfg["rate"]
-        if cfg.get("timign") and args.timing == 3:
+        if cfg.get("timing") and args.timing == 3:
             args.timing = cfg["timing"]
     if args.logfile and HAVE_EXTRAS:
         extras.setup_logging(args.logfile)
-        
+
     limiter = extras.RateLimiter(args.rate) if HAVE_EXTRAS and args.rate else None
     resumed = set(extras.load_resume(args.resume)) if args.resume and HAVE_EXTRAS else set()
-    
+
     hosts=parse_targets(args.targets, args.exclude.split(",") if args.exclude else [])
     ports=[] if args.hostonly else parse_ports(args.ports, args.top)
     delay=[1000,500,200,100,50,10][args.timing]/1000.0
@@ -158,12 +169,12 @@ def main():
     results=[]
     for host in hosts:
         if host in resumed:
-            print(f"Skipping {host} {resumed}")
+            print(f"Skipping {host} (resumed)")
             continue
         if args.traceroute and HAVE_EXTRAS:
             print(f"Traceroute to {host}:")
             for hop, addr in extras.traceroute(host):
-                print(f" {hop:2d} {addr}")
+                print(f"  {hop:2d} {addr}")
         if not args.skiphost and not args.hostonly:
             if not host_alive(host, timeout):
                 print(f"Host {host} seems down."); continue
@@ -178,8 +189,12 @@ def main():
         def scan_port(p):
             if limiter:
                 limiter.wait()
+            if args.scan == "udp" and HAVE_ADV:
+                state = advanced.udp_scan(host, p, adaptive_timeout)
+                return {"port": p, "open": state == "open", "svc": "", "ver": "", "banner": ""}
             if args.scan == "syn" and HAVE_RAW:
-                state = rawscan.raw_syn_scan(host, p, adaptive_timeout)
+                decoys = args.decoy.split(",") if args.decoy else None
+                state = rawscan.raw_syn_scan(host, p, adaptive_timeout, frag=args.fragment, ttl=args.ttl, decoys=decoys)
                 if state == "open":
                     ok, banner = tcp_connect(host, p, timeout) if args.svc else (True, "")
                     svc = SVC_MAP.get(p, "unknown") if args.svc else ""
@@ -239,6 +254,17 @@ def main():
                 if k.startswith(str(p['port'])+"/"):
                     print(f"|_{k.split('/')[1]}: {v}")
         if not port_results: print("No open ports found.")
+        if args.dns and HAVE_ADV:
+            name = advanced.reverse_dns(host)
+            if name: print(f"Reverse DNS: {name}")
+        if args.tls and HAVE_ADV and 443 in open_ports:
+            info = advanced.tls_info(host, 443)
+            if info and "error" not in info:
+                print(f"TLS: {info.get('protocol')} cipher={info.get('cipher')}")
+        if args.crawl and HAVE_ADV and (80 in open_ports or 8080 in open_ports):
+            port = 80 if 80 in open_ports else 8080
+            links = advanced.crawl(host, port)
+            if links: print("Links: " + ", ".join(links[:10]))
 
     out=None; fmt=None
     if args.outN: out=args.outN; fmt="normal"
